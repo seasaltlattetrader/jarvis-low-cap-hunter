@@ -1,0 +1,1 @@
+export default function handler(req,res){res.status(200).json({ok:true,service:'jarvis',providers:{birdeye:Boolean(process.env.BIRDEYE_API_KEY),dexScreener:true}})}
