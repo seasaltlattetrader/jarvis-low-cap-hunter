@@ -1,12 +1,52 @@
-const BIRD='https://public-api.birdeye.so';const DEX='https://api.dexscreener.com';const num=v=>Number.isFinite(Number(v))?Number(v):0;const clamp=(n,a=0,b=100)=>Math.max(a,Math.min(b,Math.round(n)));const money=n=>{n=num(n);return n>=1e9?`$${(n/1e9).toFixed(2)}B`:n>=1e6?`$${(n/1e6).toFixed(2)}M`:n>=1e3?`$${(n/1e3).toFixed(1)}K`:`$${n.toFixed(0)}`};const hdr=k=>({'X-API-KEY':k,'x-chain':'solana','accept':'application/json'});
+const BIRD='https://public-api.birdeye.so';
+const DEX='https://api.dexscreener.com';
+const num=v=>Number.isFinite(Number(v))?Number(v):0;
+const clamp=(n,a=0,b=100)=>Math.max(a,Math.min(b,Math.round(n)));
+const money=n=>{n=num(n);return n>=1e9?`$${(n/1e9).toFixed(2)}B`:n>=1e6?`$${(n/1e6).toFixed(2)}M`:n>=1e3?`$${(n/1e3).toFixed(1)}K`:`$${n.toFixed(0)}`};
+const hdr=k=>({'X-API-KEY':k,'x-chain':'solana','accept':'application/json'});
 async function get(u,h={}){const r=await fetch(u,{headers:h,cache:'no-store'});const t=await r.text();let j;try{j=JSON.parse(t)}catch{j={}}if(!r.ok){const e=new Error(`HTTP ${r.status}`);e.status=r.status;throw e}return j}
 function score(p,sm=null){const mc=num(p.marketCap||p.fdv),liq=num(p.liquidity),v1=num(p.volume_1h_usd||p.volume_1h||p.volume?.h1),pc1=num(p.price_change_1h_percent||p.priceChange?.h1),pc5=num(p.price_change_5m_percent||p.priceChange?.m5),buys=num(p.buy_1h||p.txns?.h1?.buys),sells=num(p.sell_1h||p.txns?.h1?.sells),trades5=num(p.trade_5m_count||0)+num(p.txns?.m5?.buys)+num(p.txns?.m5?.sells),pressure=buys+sells?buys/(buys+sells):.5,demand=clamp(42+(pressure-.5)*55+Math.min(20,pc1*.55)+Math.min(10,pc5*.5)+Math.min(12,Math.log10(v1+1)*2)+Math.min(8,trades5/8)),late=pc5>28&&pc1>70,setup=clamp(64+pc1*.35+pc5*.25-(late?20:0)),smartCount=num(sm?.smart_traders_no||sm?.smartTradersNo),smartSupply=num(sm?.smart_trader_supply||sm?.smartSupply),netFlow=num(sm?.net_flow||sm?.netFlow);let smart=sm?48:0;smart+=Math.min(28,smartCount*6)+Math.min(14,smartSupply*2)+(netFlow>0?12:0);smart=clamp(smart);const safety=clamp(65+Math.min(18,liq/12000)),thesis=65,total=clamp(thesis*.28+demand*.25+smart*.22+safety*.2+setup*.05),ver=Boolean(sm),verdict=ver&&smart>=60&&total>=82&&safety>=70&&demand>=65&&!late?'gem':total>=58?'watch':'pass',decision=verdict==='gem'?(late?'Strong evidence but extended — wait for reset/reclaim.':'Investigate now — multiple independent signals align.'):verdict==='watch'?(late?'Interesting but late — wait for a reset/reclaim.':'Watch — a key confirmation is still missing.'):'Pass — current evidence does not clear the bar.';return{mc,liq,v1,pc1,pc5,buys,sells,demand,setup,smart,safety,thesis,total,verdict,late,decision}}
 function coin(p,x,sm){const a=p.address||p.token_address||p.baseToken?.address||'';return{id:a,s:'$'+(p.symbol||p.baseToken?.symbol||'?'),name:p.name||p.baseToken?.name||'Unknown',address:a,mc:x.mc,liq:x.liq,age:'—',stage:x.mc<250000?'early':x.mc<1000000?'developing':'expansion',narrative:p.description||'Low-cap market candidate',thesis:x.thesis,demand:x.demand,smart:x.smart,safety:x.safety,setup:x.setup,score:x.total,verdict:x.verdict,why:x.decision,catalyst:`${money(x.v1)} 1h volume • ${x.pc1.toFixed(1)}% 1h • ${x.buys} buys / ${x.sells} sells`,decision:x.decision,invalid:'Thesis failure, demand flip, liquidity deterioration, or suspicious holder/dev behavior.',watch:false,url:p.url||`https://dexscreener.com/solana/${a}`,intel:{verified:Boolean(sm),summary:sm?'Smart-money cohort match returned by Birdeye.':'No verified smart-money cohort match on the fast scan.'}}}
 async function dexFallback(){try{const pr=await get(`${DEX}/token-profiles/latest/v1`);const prof=(Array.isArray(pr)?pr:[]).filter(x=>x.chainId==='solana'&&x.tokenAddress).slice(0,16);const got=await Promise.all(prof.map(async t=>{try{const j=await get(`${DEX}/token-pairs/v1/solana/${t.tokenAddress}`);return(Array.isArray(j)?j:[]).sort((a,b)=>num(b.liquidity?.usd)-num(a.liquidity?.usd))[0]||null}catch{return null}}));return got.filter(Boolean)}catch{return[]}}
-export default async function handler(req,res){res.setHeader('Cache-Control','no-store');const key=process.env.BIRDEYE_API_KEY||'';const sources={dex:false,birdeyeConfigured:Boolean(key),birdeyeAuthStatus:key?'checking':'no-key',smart:false,smartStatus:key?'checking':'not-attempted',holder:false,holderStatus:'deep-scan-only',security:false,securityStatus:'deep-scan-only',fresh:false};let raw=[];
- if(key){try{await get(`${BIRD}/defi/price?address=So11111111111111111111111111111111111111112`,hdr(key));sources.birdeyeAuthStatus=200}catch(e){sources.birdeyeAuthStatus=e.status||0}}
- if(sources.birdeyeAuthStatus===200){try{const q=new URLSearchParams({sort_by:'market_cap',sort_type:'desc',min_market_cap:'50000',max_market_cap:'5000000',min_liquidity:'5000',limit:'20',offset:'0'});const j=await get(`${BIRD}/defi/v3/token/list?${q}`,hdr(key));raw=j?.data?.items||j?.data||[];sources.birdeyeTokenListStatus=200}catch(e){sources.birdeyeTokenListStatus=e.status||0}}
- if(!raw.length){const pairs=await dexFallback();sources.dex=pairs.length>0;raw=pairs.map(p=>({address:p.baseToken?.address,symbol:p.baseToken?.symbol,name:p.baseToken?.name,marketCap:p.marketCap,fdv:p.fdv,liquidity:p.liquidity?.usd,volume_1h_usd:num(p.volume?.h1),price_change_1h_percent:num(p.priceChange?.h1),price_change_5m_percent:num(p.priceChange?.m5),trade_5m_count:num(p.txns?.m5?.buys)+num(p.txns?.m5?.sells),buy_1h:num(p.txns?.h1?.buys),sell_1h:num(p.txns?.h1?.sells),url:p.url,pairCreatedAt:p.pairCreatedAt,baseToken:p.baseToken}));else sources.dex=true}
- raw=raw.filter(p=>{const mc=num(p.marketCap||p.fdv),liq=num(p.liquidity||p.liquidity_usd);return mc>=50000&&mc<=5000000&&liq>=5000}).slice(0,10);
- if(sources.birdeyeAuthStatus===200){try{const j=await get(`${BIRD}/smart-money/v1/token/list?interval=1d&trader_style=all&sort_by=net_flow&sort_type=desc&offset=0&limit=20`,hdr(key));const rows=j?.data?.items||j?.data||[];const m=new Map();for(const r of rows){const a=r.address||r.token_address||r.tokenAddress||r.mint;if(a)m.set(a.toLowerCase(),r)}sources.smart=true;sources.smartStatus=200;const out=raw.map(p=>{const a=(p.address||p.token_address||p.baseToken?.address||'').toLowerCase(),sm0=m.get(a)||null;return coin(p,score(p,sm0),sm0)});sources.fresh=true;return res.status(200).json({ok:true,generatedAt:new Date().toISOString(),sources,coins:out.sort((a,b)=>b.score-a.score).slice(0,10)})}catch(e){sources.smartStatus=e.status||0}}
- const out=raw.map(p=>coin(p,score(p,null),null));sources.fresh=true;return res.status(200).json({ok:true,generatedAt:new Date().toISOString(),sources,coins:out.sort((a,b)=>b.score-a.score).slice(0,10)})}
+export default async function handler(req,res){
+  res.setHeader('Cache-Control','no-store');
+  try{
+    const key=process.env.BIRDEYE_API_KEY||'';
+    const sources={dex:false,birdeyeConfigured:Boolean(key),birdeyeAuthStatus:key?'checking':'no-key',smart:false,smartStatus:key?'checking':'not-attempted',holder:false,holderStatus:'deep-scan-only',security:false,securityStatus:'deep-scan-only',fresh:false};
+    let raw=[];
+    if(key){
+      try{await get(`${BIRD}/defi/price?address=So11111111111111111111111111111111111111112`,hdr(key));sources.birdeyeAuthStatus=200}
+      catch(e){sources.birdeyeAuthStatus=e.status||0}
+    }
+    if(sources.birdeyeAuthStatus===200){
+      try{
+        const q=new URLSearchParams({sort_by:'market_cap',sort_type:'desc',min_market_cap:'50000',max_market_cap:'5000000',min_liquidity:'5000',limit:'20',offset:'0'});
+        const j=await get(`${BIRD}/defi/v3/token/list?${q}`,hdr(key));
+        raw=j?.data?.items||j?.data||[]; sources.birdeyeTokenListStatus=200;
+      }catch(e){sources.birdeyeTokenListStatus=e.status||0}
+    }
+    if(!raw.length){
+      const pairs=await dexFallback();
+      sources.dex=pairs.length>0;
+      raw=pairs.map(p=>({address:p.baseToken?.address,symbol:p.baseToken?.symbol,name:p.baseToken?.name,marketCap:p.marketCap,fdv:p.fdv,liquidity:p.liquidity?.usd,volume_1h_usd:num(p.volume?.h1),price_change_1h_percent:num(p.priceChange?.h1),price_change_5m_percent:num(p.priceChange?.m5),trade_5m_count:num(p.txns?.m5?.buys)+num(p.txns?.m5?.sells),buy_1h:num(p.txns?.h1?.buys),sell_1h:num(p.txns?.h1?.sells),url:p.url,pairCreatedAt:p.pairCreatedAt,baseToken:p.baseToken}));
+    }else{
+      sources.dex=true;
+    }
+    raw=raw.filter(p=>{const mc=num(p.marketCap||p.fdv),liq=num(p.liquidity||p.liquidity_usd);return mc>=50000&&mc<=5000000&&liq>=5000}).slice(0,10);
+    if(sources.birdeyeAuthStatus===200){
+      try{
+        const j=await get(`${BIRD}/smart-money/v1/token/list?interval=1d&trader_style=all&sort_by=net_flow&sort_type=desc&offset=0&limit=20`,hdr(key));
+        const rows=j?.data?.items||j?.data||[];const m=new Map();
+        for(const r of rows){const a=r.address||r.token_address||r.tokenAddress||r.mint;if(a)m.set(a.toLowerCase(),r)}
+        sources.smart=true;sources.smartStatus=200;
+        const out=raw.map(p=>{const a=(p.address||p.token_address||p.baseToken?.address||'').toLowerCase(),sm0=m.get(a)||null;return coin(p,score(p,sm0),sm0)});
+        sources.fresh=true;return res.status(200).json({ok:true,generatedAt:new Date().toISOString(),sources,coins:out.sort((a,b)=>b.score-a.score).slice(0,10)})
+      }catch(e){sources.smartStatus=e.status||0}
+    }
+    const out=raw.map(p=>coin(p,score(p,null),null));
+    sources.fresh=true;
+    return res.status(200).json({ok:true,generatedAt:new Date().toISOString(),sources,coins:out.sort((a,b)=>b.score-a.score).slice(0,10)})
+  }catch(e){
+    return res.status(200).json({ok:false,generatedAt:new Date().toISOString(),sources:{dex:false,birdeyeConfigured:Boolean(process.env.BIRDEYE_API_KEY),fresh:false},error:e?.message||'server error',coins:[]})
+  }
+}
