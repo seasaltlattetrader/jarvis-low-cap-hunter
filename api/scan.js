@@ -14,8 +14,10 @@ function score(p){
  const liquidity=clamp(58+Math.min(30,liq/9000));
  const thesis=clamp(Boolean(p.description||p.narrative||p.symbol||p.name)?65:45);
  const total=clamp(thesis*.32+demand*.30+liquidity*.23+structure*.15);
- const verdict=total>=78&&!late?'investigate':total>=58?'watch':'pass';
- const decision=verdict==='investigate'?(late?'BUY SETUP invalid — extended. Wait for reset/reclaim.':'BUY SETUP — thesis, demand, liquidity and structure align. Verify wallets before entry.') : verdict==='watch'?(late?'Watch — interesting but late. Wait for reset/reclaim.':'WATCH — promising, but not enough confluence for a buy setup.'):'PASS — current evidence does not clear the bar.';
+ let verdict='pass', decision='PASS — current evidence does not clear the bar.';
+ if(late){verdict='too_late';decision=total>=70?'TOO LATE — setup may be strong, but the current move is extended. Wait for a reset/reclaim.':'TOO LATE — do not chase the move.'}
+ else if(total>=78){verdict='buy_setup';decision='BUY SETUP — thesis, demand, liquidity and structure align. Verify wallets before entry.'}
+ else if(total>=58){verdict='wait';decision='WAIT — promising, but not enough confluence for a buy setup.'}
  return{mc,liq,v5,v1,pc5,pc1,buys,sells,demand,liquidity,structure,thesis,total,verdict,late,decision}
 }
 function coin(p,x){const a=p.address||p.token_address||p.baseToken?.address||p.mint||'';return{id:a,s:'$'+(p.symbol||p.baseToken?.symbol||'?'),name:p.name||p.baseToken?.name||'Unknown',address:a,mc:x.mc,liq:x.liq,age:age(p.recent_listing_time||p.creation_time||p.creationTime||p.created_at||p.pairCreatedAt||0),stage:x.mc<250000?'early':x.mc<1000000?'developing':'expansion',narrative:p.description||p.narrative||'Solana meme candidate',thesis:x.thesis,demand:x.demand,safety:x.liquidity,setup:x.structure,score:x.total,verdict:x.verdict,why:x.decision,catalyst:`${money(x.v5)} 5m volume • ${money(x.v1)} 1h volume • ${x.pc5.toFixed(1)}% 5m • ${x.pc1.toFixed(1)}% 1h`,decision:x.decision,invalid:'Thesis failure, demand flip, liquidity deterioration, or suspicious wallet/dev behavior.',watch:false,url:p.url||`https://dexscreener.com/solana/${a}`,intel:{verified:false,summary:'Smart-money is intentionally manual in this JARVIS build. Verify profitable-wallet accumulation before entry.'}}}
@@ -27,11 +29,9 @@ export default async function handler(req,res){
   const sources={dex:false,birdeyeConfigured:Boolean(key),birdeyeAuthStatus:key?'checking':'no-key',tokenListStatus:0,smartMoney:'manual',holderSecurity:'manual',fresh:false};
   let raw=[];
   if(key){try{await get(`${BIRD}/defi/price?address=So11111111111111111111111111111111111111112`,hdr(key));sources.birdeyeAuthStatus=200}catch(e){sources.birdeyeAuthStatus=e.status||0}}
-  if(sources.birdeyeAuthStatus===200){
-   // Birdeye documents sort_by/sort_type as required. Keep this request deliberately minimal and do richer filtering locally.
-   try{const q=new URLSearchParams({sort_by:'progress_percent',sort_type:'desc',source:'all',min_market_cap:'50000',max_market_cap:'5000000',min_liquidity:'5000',limit:'100',offset:'0'});const j=await get(`${BIRD}/defi/v3/token/meme/list?${q}`,hdr(key));raw=j?.data?.items||j?.data||[];sources.tokenListStatus=200}catch(e){sources.tokenListStatus=e.status||0}}
+  if(sources.birdeyeAuthStatus===200){try{const q=new URLSearchParams({sort_by:'progress_percent',sort_type:'desc',source:'all',min_market_cap:'50000',max_market_cap:'5000000',min_liquidity:'5000',limit:'100',offset:'0'});const j=await get(`${BIRD}/defi/v3/token/meme/list?${q}`,hdr(key));raw=j?.data?.items||j?.data||[];sources.tokenListStatus=200}catch(e){sources.tokenListStatus=e.status||0}}
   if(!raw.length){const pairs=await dexFallback();sources.dex=pairs.length>0;raw=pairs.map(p=>({address:p.baseToken?.address,symbol:p.baseToken?.symbol,name:p.baseToken?.name,marketCap:p.marketCap,fdv:p.fdv,liquidity:p.liquidity?.usd,volume_5m_usd:num(p.volume?.m5),volume_1h_usd:num(p.volume?.h1),price_change_5m_percent:num(p.priceChange?.m5),price_change_1h_percent:num(p.priceChange?.h1),trade_5m_count:num(p.txns?.m5?.buys)+num(p.txns?.m5?.sells),buy_1h:num(p.txns?.h1?.buys),sell_1h:num(p.txns?.h1?.sells),pairCreatedAt:p.pairCreatedAt,url:p.url,baseToken:p.baseToken}))}else sources.dex=true;
   raw=raw.filter(p=>{const mc=num(p.marketCap||p.market_cap||p.fdv),liq=num(p.liquidity||p.liquidity_usd),v5=num(p.volume_5m_usd||p.volume?.m5);return mc>=50000&&mc<=5000000&&liq>=5000&&v5>=500}).sort((a,b)=>num(b.volume_5m_usd||b.volume?.m5)-num(a.volume_5m_usd||a.volume?.m5)).slice(0,25);
-  const out=raw.map(p=>coin(p,score(p))).sort((a,b)=>{const v={investigate:3,watch:2,pass:1};return(v[b.verdict]-v[a.verdict])||(b.score-a.score)}).slice(0,15);sources.fresh=true;
+  const out=raw.map(p=>coin(p,score(p))).sort((a,b)=>{const v={buy_setup:4,wait:3,too_late:2,pass:1};return(v[b.verdict]-v[a.verdict])||(b.score-a.score)}).slice(0,15);sources.fresh=true;
   return res.status(200).json({ok:true,generatedAt:new Date().toISOString(),sources,coins:out});
  }catch(e){return res.status(200).json({ok:false,generatedAt:new Date().toISOString(),sources:{dex:false,birdeyeConfigured:Boolean(process.env.BIRDEYE_API_KEY),smartMoney:'manual',holderSecurity:'manual',fresh:false},error:e?.message||'server error',coins:[]})}}
